@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Test de protection</title>
+<style>
+body{margin:0;background:#0A1230;color:#F2F5FF;font:16px/1.5 system-ui,sans-serif}
+main{max-width:520px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:24px}p{background:#15245A;border-radius:12px;padding:12px}
+.ok{background:#0F3A36;color:#7CE8D3}.err{background:#43171D;color:#FFB3BA}
+button{font:700 16px system-ui,sans-serif;min-height:48px;width:100%;border:0;border-radius:14px;background:#FF6B1A;color:#0B1530;margin-bottom:10px}
+</style>
+</head>
+<body>
+<main id="app"><p>Chargement…</p></main>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js";
+import { getFirestore, doc, getDocFromServer, getDocsFromServer, setDoc, deleteDoc, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
+const app = initializeApp({
+  apiKey: "AIzaSyDq9x7iJ62j9ScseySYmyRfiIlNWEiDhqc",
+  authDomain: "coach-serge.firebaseapp.com",
+  projectId: "coach-serge",
+  storageBucket: "coach-serge.firebasestorage.app",
+  messagingSenderId: "736900684558",
+  appId: "1:736900684558:web:26743686b2cd7bf4d0555f"
+});
+const auth = getAuth(app), db = getFirestore(app);
+const $app = document.getElementById('app');
+const el = (tag, text, cls = '') => Object.assign(document.createElement(tag), {textContent:text, className:cls});
+const btn = (text, onclick) => Object.assign(el('button', text), {type:'button', onclick});
+function show(...nodes){ $app.replaceChildren(el('h1','Test de protection'), ...nodes); }
+const say = (text, cls) => $app.append(el('p', text, cls));
+
+// Résultat : 'autorise', 'bloque' (refus des règles) ou 'inconnu' (autre problème).
+async function essai(action){
+  let t;
+  try { await Promise.race([action(), new Promise((_, no) => t = setTimeout(() => no({code:'delai'}), 15000))]); return 'autorise'; }
+  catch(e){ return e && e.code === 'permission-denied' ? 'bloque' : 'inconnu'; }
+  finally { clearTimeout(t); }
+}
+
+async function tester(user){
+  const out = btn('Se déconnecter', () => signOut(auth));
+  show(out);
+  let estCoach;
+  const role = await essai(async () => { estCoach = (await getDocFromServer(doc(db,'admins',user.uid))).exists(); });
+  if (role !== 'autorise') return say('Test non concluant : impossible de lire le rôle. Vérifie Internet et réessaie.', 'err');
+  if (estCoach) return say('Tu es sur le compte COACH. Déconnecte-toi, puis choisis le compte CLIENT.', 'err');
+  const temoin = await essai(() => getDocFromServer(doc(db,'clients',user.uid)));
+  if (temoin !== 'autorise') return say('Test non concluant : ta propre fiche ne peut pas être lue.', 'err');
+  say('✅ Le client peut lire sa propre fiche', 'ok');
+  // Identifiants inventés : aucune vraie fiche n'est touchée.
+  const autre = 'test-fiche-autre-personne';
+  const essais = [
+    ['Voir la liste de tous les clients', () => getDocsFromServer(collection(db,'clients'))],
+    ['Lire la fiche d\'une autre personne', () => getDocFromServer(doc(db,'clients',autre))],
+    ['Écrire sur la fiche d\'une autre personne', () => setDoc(doc(db,'clients',autre), {nom:'Intrus', telephone:'', objectif:'perte', message:'', email:user.email, majLe:serverTimestamp()})],
+    ['Supprimer la fiche d\'une autre personne', () => deleteDoc(doc(db,'clients',autre))],
+    ['Lire le rôle d\'un autre compte', () => getDocFromServer(doc(db,'admins','test-autre-compte'))],
+    ['Se nommer soi-même coach', () => setDoc(doc(db,'admins',user.uid), {role:'coach'})]
+  ];
+  let bloques = 0, ouverts = 0;
+  for (const [nom, action] of essais){
+    const r = await essai(action);
+    if (r === 'bloque'){ bloques++; say('✅ BLOQUÉ : ' + nom, 'ok'); }
+    else if (r === 'autorise'){ ouverts++; say('❌ AUTORISÉ (à corriger) : ' + nom, 'err'); }
+    else say('⚠️ Non vérifié : ' + nom, 'err');
+  }
+  if (ouverts) say('DANGER : ' + ouverts + ' accès interdit(s) sont ouverts. Envoie une capture à Claude.', 'err');
+  else if (bloques === essais.length) say('RÉSULTAT : ' + bloques + ' accès interdits sur ' + essais.length + ' sont bloqués.', 'ok');
+  else say('Test incomplet. Vérifie Internet et réessaie.', 'err');
+}
+
+onAuthStateChanged(auth, user => {
+  if (user) return tester(user);
+  show(el('p','Connecte-toi avec le compte CLIENT (pas le compte coach).'),
+    btn('Continuer avec Google', () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => say('Connexion impossible (' + e.code + ')', 'err'))));
+});
+</script>
+</body>
+</html>
